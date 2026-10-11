@@ -1,0 +1,33 @@
+gt.blockmachines.hatch.dual_output.me.name=输出总成(ME)
+
+dualoutputhatchme.desc.0=多方块的物品与流体输出
+dualoutputhatchme.desc.1=物品与流体都直接存入 ME 网络
+dualoutputhatchme.desc.2=会被多方块同时识别为输出总线与输出仓
+dualoutputhatchme.desc.3=与普通输出总线(ME)/输出仓(ME)同用时优先接收
+dualoutputhatchme.desc.4=界面里可调整缓存冲入 ME 的间隔（tick）
+dualoutputhatchme.desc.5=用线剪右击可更改 ME 连接行为
+
+dualoutputhatchme.gui.network=网络状态: %s
+dualoutputhatchme.gui.online=在线
+dualoutputhatchme.gui.offline=离线
+dualoutputhatchme.gui.interval.tooltip=缓存冲入 ME 网络的时间间隔（tick）
+
+dualoutputhatchme.gui.tab.main=缓存视图
+dualoutputhatchme.gui.tab.settings=设置（优先级 / 过滤）
+dualoutputhatchme.gui.priority=输出优先级
+dualoutputhatchme.gui.priority.tooltip=同机有多个输出总成时，物品与流体优先进优先级高的
+dualoutputhatchme.gui.filter.items=物品过滤（词典名，逗号分隔）
+dualoutputhatchme.gui.filter.items.tooltip=只接受带有这些 OreDictionary 词典名之一的物品，留空接受全部
+dualoutputhatchme.gui.filter.fluids=流体过滤（流体名，逗号分隔）
+dualoutputhatchme.gui.filter.mode=过滤模式
+dualoutputhatchme.gui.filter.mode.tooltip=切换标签过滤 / 具体过滤
+dualoutputhatchme.gui.filter.mode.tag=标签过滤
+dualoutputhatchme.gui.filter.mode.specific=具体过滤
+dualoutputhatchme.gui.filter.items.specific=物品标记
+dualoutputhatchme.gui.filter.items.specific.tooltip=左键点击格子标记手中物品，右键清除
+dualoutputhatchme.gui.filter.fluids.specific=流体标记
+dualoutputhatchme.gui.filter.fluids.specific.tooltip=手持流体容器左键点击格子标记，右键清除
+dualoutputhatchme.gui.filter.fluids.tooltip=只接受注册名在列表中的流体，留空接受全部
+
+dualoutputhatchme.waila.items=物品缓存（%s 种）：
+dualoutputhatchme.waila.fluids=流体缓存（%s 种）：

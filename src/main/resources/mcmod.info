@@ -1,0 +1,23 @@
+{
+  "modListVersion": 2,
+  "modList": [
+    {
+      "modid": "${modId}",
+      "name": "${modName}",
+      "description": "A ME hatch that combines Output Bus (ME) and Output Hatch (ME): outputs both items and fluids from multiblocks directly into the ME network.",
+      "version": "${modVersion}",
+      "mcversion": "${minecraftVersion}",
+      "url": "",
+      "updateUrl": "",
+      "authorList": [],
+      "credits": "",
+      "logoFile": "",
+      "screenshots": [],
+      "parent": "",
+      "requiredMods": [],
+      "dependencies": [],
+      "dependants": [],
+      "useDependencyInformation": false
+    }
+  ]
+}

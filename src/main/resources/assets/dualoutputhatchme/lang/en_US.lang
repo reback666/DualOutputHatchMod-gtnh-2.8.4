@@ -1,0 +1,33 @@
+gt.blockmachines.hatch.dual_output.me.name=Output Assembly (ME)
+
+dualoutputhatchme.desc.0=Item and Fluid Output for Multiblocks
+dualoutputhatchme.desc.1=Stores both directly into the ME network
+dualoutputhatchme.desc.2=Recognised by multiblocks as an Output Bus and an Output Hatch at once
+dualoutputhatchme.desc.3=Takes priority over plain ME Output Buses and Hatches
+dualoutputhatchme.desc.4=Change the cache flush interval (ticks) in the GUI
+dualoutputhatchme.desc.5=Right-click with a wire cutter to change the ME connection behavior
+
+dualoutputhatchme.gui.network=Network status: %s
+dualoutputhatchme.gui.online=Online
+dualoutputhatchme.gui.offline=Offline
+dualoutputhatchme.gui.interval.tooltip=Interval in ticks between cache flushes into the ME network
+
+dualoutputhatchme.gui.tab.main=Cache view
+dualoutputhatchme.gui.tab.settings=Settings (priority / filters)
+dualoutputhatchme.gui.priority=Output priority
+dualoutputhatchme.gui.priority.tooltip=With multiple Output Assemblies, items and fluids go to the highest priority first
+dualoutputhatchme.gui.filter.items=Item filter (OreDictionary names, comma-separated)
+dualoutputhatchme.gui.filter.items.tooltip=Only accepts items carrying one of these OreDictionary names; leave empty to accept all
+dualoutputhatchme.gui.filter.fluids=Fluid filter (fluid names, comma-separated)
+dualoutputhatchme.gui.filter.mode=Filter mode
+dualoutputhatchme.gui.filter.mode.tooltip=Switch between tag filtering / specific filtering
+dualoutputhatchme.gui.filter.mode.tag=Tag filter
+dualoutputhatchme.gui.filter.mode.specific=Specific filter
+dualoutputhatchme.gui.filter.items.specific=Item marks
+dualoutputhatchme.gui.filter.items.specific.tooltip=Left-click a slot to mark the held item, right-click to clear
+dualoutputhatchme.gui.filter.fluids.specific=Fluid marks
+dualoutputhatchme.gui.filter.fluids.specific.tooltip=Left-click a slot with a fluid container to mark, right-click to clear
+dualoutputhatchme.gui.filter.fluids.tooltip=Only accepts fluids whose registry name is listed; leave empty to accept all
+
+dualoutputhatchme.waila.items=Item cache (%s types):
+dualoutputhatchme.waila.fluids=Fluid cache (%s types):
