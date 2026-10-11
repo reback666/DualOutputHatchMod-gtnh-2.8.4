@@ -1,4 +1,3 @@
-
 name: Build and test
 
 on:
@@ -10,4 +9,8 @@ on:
 jobs:
   build-and-test:
     uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/build-and-test.yml@master
+    # GT5u dev 依赖内嵌的 tectech 声明依赖 YAMCore（未上 GTNH maven），
+    # CI 的专用服务器会因缺依赖崩溃，故 CI 只编译不跑服务器。
+    with:
+      client-only: true
     secrets: inherit
