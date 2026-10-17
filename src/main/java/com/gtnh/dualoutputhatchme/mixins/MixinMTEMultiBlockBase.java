@@ -6,8 +6,10 @@ import net.minecraftforge.fluids.FluidStack;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import com.gtnh.dualoutputhatchme.api.IDualOutputHatch;
@@ -18,6 +20,7 @@ import gregtech.api.metatileentity.implementations.MTEHatchOutput;
 import gregtech.api.metatileentity.implementations.MTEHatchOutputBus;
 import gregtech.api.metatileentity.implementations.MTEMultiBlockBase;
 import gregtech.common.tileentities.machines.ItemBusShadowHatch;
+import gregtech.common.tileentities.machines.MTEDualOutputHatchME;
 
 /**
  * 输出总成(ME) 的归类挂载、优先级与物品分发兜底。
@@ -49,6 +52,17 @@ public abstract class MixinMTEMultiBlockBase {
     @Shadow(remap = false)
     public ArrayList<MTEHatchOutput> mOutputHatches;
 
+    @Unique
+    private boolean dualoutputhatchme$orderReady;
+    @Unique
+    private boolean dualoutputhatchme$hasDualOutputs;
+    @Unique
+    private int dualoutputhatchme$busCount;
+    @Unique
+    private int dualoutputhatchme$hatchCount;
+    @Unique
+    private long dualoutputhatchme$orderRevision;
+
     private void dualoutputhatchme$attachShadow(IMetaTileEntity metaTileEntity) {
         if (!(metaTileEntity instanceof IDualOutputHatch)) {
             return;
@@ -66,6 +80,7 @@ public abstract class MixinMTEMultiBlockBase {
             return;
         }
         this.mOutputBusses.add(shadow);
+        this.dualoutputhatchme$orderReady = false;
     }
 
     private boolean dualoutputhatchme$hasDualOutputHatch() {
@@ -79,7 +94,7 @@ public abstract class MixinMTEMultiBlockBase {
 
     /**
      * 物品分发顺序：影子总线在前（按主仓优先级降序），其余总线保持原有相对顺序。
-     * List.sort 是稳定排序，已有序时是 O(n)，每次分发前调用没有开销问题。
+     * 仅在结构列表或优先级发生变化时稳定排序。
      * 多个输出总成同机时，物品优先进优先级高的输出总成。
      */
     private void dualoutputhatchme$sortOutputBusses() {
@@ -136,6 +151,39 @@ public abstract class MixinMTEMultiBlockBase {
         }
     }
 
+    @Unique
+    private void dualoutputhatchme$ensureOutputOrder() {
+        long revision = MTEDualOutputHatchME.getOutputOrderRevision();
+        if (
+            this.dualoutputhatchme$orderReady && this.dualoutputhatchme$busCount == this.mOutputBusses.size()
+                && this.dualoutputhatchme$hatchCount == this.mOutputHatches.size()
+                && (!this.dualoutputhatchme$hasDualOutputs || this.dualoutputhatchme$orderRevision == revision)
+        ) {
+            return;
+        }
+        this.dualoutputhatchme$attachAllShadows();
+        this.dualoutputhatchme$hasDualOutputs = false;
+        for (MTEHatchOutputBus bus : this.mOutputBusses) {
+            if (bus instanceof ItemBusShadowHatch) {
+                this.dualoutputhatchme$hasDualOutputs = true;
+                break;
+            }
+        }
+        if (this.dualoutputhatchme$hasDualOutputs) {
+            this.dualoutputhatchme$sortOutputBusses();
+            this.dualoutputhatchme$sortOutputHatches();
+        }
+        this.dualoutputhatchme$busCount = this.mOutputBusses.size();
+        this.dualoutputhatchme$hatchCount = this.mOutputHatches.size();
+        this.dualoutputhatchme$orderRevision = revision;
+        this.dualoutputhatchme$orderReady = true;
+    }
+
+    @Inject(method = "clearHatches", at = @At("HEAD"), remap = false)
+    private void dualoutputhatchme$invalidateOutputOrder(CallbackInfo ci) {
+        this.dualoutputhatchme$orderReady = false;
+    }
+
     /**
      * 流体侧收口：主仓被加入 mOutputHatches 后，把影子输出总线挂进 mOutputBusses。
      */
@@ -181,8 +229,7 @@ public abstract class MixinMTEMultiBlockBase {
     private void dualoutputhatchme$ensureShadowBeforeDump(java.util.List<MTEHatchOutputBus> outputBuses,
         net.minecraft.item.ItemStack itemStack, boolean restrictiveBusesOnly, boolean simulate,
         CallbackInfoReturnable<Boolean> cir) {
-        this.dualoutputhatchme$attachAllShadows();
-        this.dualoutputhatchme$sortOutputBusses();
+        this.dualoutputhatchme$ensureOutputOrder();
     }
 
     /**
@@ -190,7 +237,7 @@ public abstract class MixinMTEMultiBlockBase {
      */
     @Inject(method = "addOutput(Lnet/minecraftforge/fluids/FluidStack;)Z", at = @At("HEAD"), remap = false)
     private void dualoutputhatchme$prioritizeFluidBeforeDump(FluidStack aLiquid, CallbackInfoReturnable<Boolean> cir) {
-        this.dualoutputhatchme$sortOutputHatches();
+        this.dualoutputhatchme$ensureOutputOrder();
     }
 
     /**

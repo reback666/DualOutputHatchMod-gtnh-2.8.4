@@ -44,13 +44,16 @@ import com.gtnewhorizons.modularui.common.widget.TextWidget;
 import com.gtnewhorizons.modularui.common.widget.textfield.NumericWidget;
 import com.gtnewhorizons.modularui.common.widget.textfield.TextFieldWidget;
 import com.gtnh.dualoutputhatchme.DualOutputHatchMod;
+import com.gtnh.dualoutputhatchme.api.CacheFlushQueue;
 import com.gtnh.dualoutputhatchme.api.DualCacheEntry;
 import com.gtnh.dualoutputhatchme.api.IDualOutputHatch;
 import com.gtnh.dualoutputhatchme.registration.Registration;
 
 import appeng.api.AEApi;
+import appeng.api.networking.energy.IEnergyGrid;
 import appeng.api.networking.security.BaseActionSource;
 import appeng.api.networking.security.MachineSource;
+import appeng.api.networking.storage.IStorageGrid;
 import appeng.api.storage.IMEMonitor;
 import appeng.api.storage.data.IAEFluidStack;
 import appeng.api.storage.data.IAEItemStack;
@@ -65,7 +68,6 @@ import codechicken.nei.NEIClientConfig;
 import codechicken.nei.recipe.GuiCraftingRecipe;
 import codechicken.nei.recipe.GuiUsageRecipe;
 import codechicken.nei.util.NEIKeyboardUtils;
-import cpw.mods.fml.common.FMLLog;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import gregtech.api.gui.modularui.GTUITextures;
@@ -95,8 +97,11 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
 
     /** 缓存冲入 ME 网络的默认间隔（tick）。 */
     public static final int DEFAULT_FLUSH_INTERVAL = 10;
-    public static final int MIN_FLUSH_INTERVAL = 1;
+    public static final int MIN_FLUSH_INTERVAL = 2;
     public static final int MAX_FLUSH_INTERVAL = 72000;
+
+    private static final int MAX_FLUSH_OPERATIONS = 64;
+    private static long outputOrderRevision = 0L;
 
     private static final String NBT_FLUSH_INTERVAL = "dualFlushInterval";
 
@@ -110,7 +115,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
     private static final int ROW_HEIGHT = 18;
 
     /** 界面列表的服务端快照重建间隔（tick），避免每 tick 重算整份缓存。 */
-    private static final int SNAPSHOT_INTERVAL = 10;
+    private static final int SNAPSHOT_INTERVAL = 2;
     /** 界面列表最多同步多少项，防止极端缓存把同步包撑爆。 */
     private static final int SNAPSHOT_LIMIT = 400;
 
@@ -167,22 +172,17 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
     private final ItemStack[] filterItemMarks = new ItemStack[FILTER_ITEM_SLOTS];
     private final FluidStack[] filterFluidMarks = new FluidStack[FILTER_FLUID_SLOTS];
 
-    /**
-     * 待冲标记：只有真的收进了东西才在下一轮去查 AE 网络。
-     * 缓存冲空之后 IAEItemList 里会留下数量为 0 的条目（GT 输出总线(ME) 也一样），
-     * 只看 isEmpty() 会导致空缓存也每隔几 tick 取一次 storage、遍历一遍缓存。
-     */
-    private boolean itemsPending = false;
-    private boolean fluidsPending = false;
+    private final CacheFlushQueue<IAEItemStack> itemFlushQueue = new CacheFlushQueue<>();
+    private final CacheFlushQueue<IAEFluidStack> fluidFlushQueue = new CacheFlushQueue<>();
 
     // ---------------- 界面数据 ----------------
 
     // 悬停 tooltip 与按键集成要跨方法访问列表控件
     private CacheListWidget cacheList;
 
-    /** 界面列表用的服务端快照，隔 SNAPSHOT_INTERVAL 或在缓存变化后重建。 */
+    /** 只有缓存变化且到达更新间隔时才重建，未打开窗口时不会求值。 */
     private List<DualCacheEntry> syncSnapshot = Collections.emptyList();
-    private long syncSnapshotTick = 0L;
+    private long syncSnapshotTick = -SNAPSHOT_INTERVAL;
     private boolean syncSnapshotDirty = true;
     /** 客户端收到的界面列表。 */
     private List<DualCacheEntry> clientCacheEntries = Collections.emptyList();
@@ -235,18 +235,23 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
         return super.canStoreFluid(fluidStack);
     }
 
-    /** 流体进本仓的唯一入口是父类的 fill -> tryFillAE，这里顺带记上待冲标记。 */
+    /** 父类 fill 经此接收流体，并将实际缓存条目加入上传队列。 */
     @Override
     public int tryFillAE(FluidStack aFluid) {
         if (!this.matchesFluidFilter(aFluid)) {
             return 0;
         }
-        int filled = super.tryFillAE(aFluid);
-        if (filled > 0) {
-            this.fluidsPending = true;
-            this.syncSnapshotDirty = true;
+        if (aFluid == null || aFluid.amount <= 0) {
+            return 0;
         }
-        return filled;
+        IAEFluidStack accepted = AEApi.instance()
+            .storage()
+            .createFluidStack(aFluid);
+        this.fluidCache.add(accepted);
+        this.fluidFlushQueue.add(this.fluidCache.findPrecise(accepted));
+        this.lastInputTick = this.tickCounter;
+        this.syncSnapshotDirty = true;
+        return aFluid.amount;
     }
 
     // ---------------- 物品接收（语义同 MTEHatchOutputBusME.storePartial） ----------------
@@ -261,11 +266,11 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
             return false;
         }
         if (!simulate) {
-            this.itemCache.add(
-                AEApi.instance()
-                    .storage()
-                    .createItemStack(stack));
-            this.itemsPending = true;
+            IAEItemStack accepted = AEApi.instance()
+                .storage()
+                .createItemStack(stack);
+            this.itemCache.add(accepted);
+            this.itemFlushQueue.add(this.itemCache.findPrecise(accepted));
             this.syncSnapshotDirty = true;
         }
         stack.stackSize = 0;
@@ -319,56 +324,37 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
     }
 
     /**
-     * 一次把物品与流体缓存都冲进 ME 网络：共用一次 getStorage()、一个 ActionSource。
+     * 共用网络查询与总预算，未完成的条目留在轮转队列中，不依赖新产出来唤醒。
      */
     private void flushCache() {
-        if (!this.isActive()) {
-            return;
-        }
-        boolean hasItems = this.itemsPending;
-        boolean hasFluids = this.fluidsPending;
+        boolean hasItems = !this.itemFlushQueue.isEmpty();
+        boolean hasFluids = !this.fluidFlushQueue.isEmpty();
         if (!hasItems && !hasFluids) {
             return;
         }
         AENetworkProxy proxy = this.getProxy();
-        if (proxy == null) {
+        if (proxy == null || !proxy.isActive()) {
             return;
         }
         try {
             BaseActionSource request = this.getItemRequest();
+            IStorageGrid storage = proxy.getStorage();
+            IEnergyGrid energy = proxy.getEnergy();
+            Runnable onChanged = () -> this.syncSnapshotDirty = true;
+            int used = 0;
             if (hasItems) {
-                IMEMonitor itemInventory = proxy.getStorage()
-                    .getItemInventory();
-                for (IAEItemStack s : this.itemCache) {
-                    if (s.getStackSize() == 0L) {
-                        continue;
-                    }
-                    IAEItemStack rest = Platform.poweredInsert(proxy.getEnergy(), itemInventory, s, request);
-                    s.setStackSize(rest != null && rest.getStackSize() > 0L ? rest.getStackSize() : 0L);
-                }
-                this.itemsPending = false;
+                IMEMonitor<IAEItemStack> inventory = storage.getItemInventory();
+                used = this.itemFlushQueue.flush(
+                    hasFluids ? MAX_FLUSH_OPERATIONS / 2 : MAX_FLUSH_OPERATIONS,
+                    stack -> Platform.poweredInsert(energy, inventory, stack, request),
+                    onChanged);
             }
             if (hasFluids) {
-                IMEMonitor fluidInventory = proxy.getStorage()
-                    .getFluidInventory();
-                for (IAEFluidStack s : this.fluidCache) {
-                    if (s.getStackSize() == 0L) {
-                        continue;
-                    }
-                    // fluidAEInsert 每次调用受能量节流最多注入 1000mB，
-                    // 循环调用直到排空；量不再减少（网络满/无电力）时退出防死循环
-                    IAEFluidStack rest = s;
-                    long lastSize = -1L;
-                    int guard = 0;
-                    while (
-                        rest != null && rest.getStackSize() > 0L && rest.getStackSize() != lastSize && guard++ < 512
-                    ) {
-                        lastSize = rest.getStackSize();
-                        rest = MTEHatchOutputME.fluidAEInsert(proxy.getEnergy(), fluidInventory, rest, request);
-                    }
-                    s.setStackSize(rest == null ? 0L : rest.getStackSize());
-                }
-                this.fluidsPending = false;
+                IMEMonitor<IAEFluidStack> inventory = storage.getFluidInventory();
+                this.fluidFlushQueue.flush(
+                    MAX_FLUSH_OPERATIONS - used,
+                    stack -> MTEHatchOutputME.fluidAEInsert(energy, inventory, stack, request),
+                    onChanged);
             }
         } catch (GridAccessException e) {
             // ME 网络不可达，缓存保留
@@ -396,10 +382,15 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
         return this.outputPriority;
     }
 
+    public static long getOutputOrderRevision() {
+        return outputOrderRevision;
+    }
+
     public void setOutputPriority(int priority) {
         int clamped = Math.max(0, Math.min(MAX_PRIORITY, priority));
         if (clamped != this.outputPriority) {
             this.outputPriority = clamped;
+            outputOrderRevision++;
             this.markDirty();
         }
     }
@@ -697,7 +688,6 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
             }
             // 列表停用后不再 draw，悬停下标会冻结在旧值——清掉，防止 NEI 拿到过期物品
             list.hoveredIndex = -1;
-            list.lastDebugState = Integer.MIN_VALUE;
         };
         tabMain.setOnClick((clickData, widget) -> showMainPage.run());
         tabSettings.setOnClick((clickData, widget) -> showSettingsPage.run());
@@ -946,12 +936,12 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
     }
 
     /**
-     * 服务端限频快照：至少每 SNAPSHOT_INTERVAL tick 或在缓存变化后重建一次，
+     * 服务端限频快照：缓存变化也必须等待 SNAPSHOT_INTERVAL tick，
      * 返回值未变化时 ListSyncer 不会重复发包。
      */
     private List<DualCacheEntry> getCacheSnapshot() {
         long now = this.dualTickCounter;
-        if (!this.syncSnapshotDirty && now - this.syncSnapshotTick < SNAPSHOT_INTERVAL) {
+        if (!this.syncSnapshotDirty || now - this.syncSnapshotTick < SNAPSHOT_INTERVAL) {
             return this.syncSnapshot;
         }
         this.syncSnapshotTick = now;
@@ -995,8 +985,6 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
      */
     private static class CacheListWidget extends Widget implements Interactable, IHasStackUnderMouse {
 
-        private static final boolean DEBUG_NEI_HOVER = false;
-
         private static final Rectangle ROW_ODD = new Rectangle().setColor(0x20FFFFFF);
         private static final Rectangle ROW_EVEN = new Rectangle().setColor(0x10FFFFFF);
 
@@ -1004,10 +992,6 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
         private int scrollRow = 0;
         /** 当前鼠标悬停的缓存条目下标（-1 = 无），每次 draw 刷新，供 NEI 查询。 */
         private int hoveredIndex = -1;
-        /** 诊断用：上次日志的状态，状态变化才打一行，避免刷屏。 */
-        private int lastDebugState = Integer.MIN_VALUE;
-        /** 诊断用：NEI 查询计数。 */
-        private int debugCallCount = 0;
 
         private List<DualCacheEntry> iconSource = null;
         private IDrawable[] icons = null;
@@ -1074,7 +1058,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
         }
 
         /**
-         * 换算鼠标在列表内的行号（实测坐标系，见 1.4.2 诊断日志）：
+         * 换算鼠标在列表内的行号：
          * Cursor.getPos() 是屏幕坐标，Widget.getPos() 是窗口内坐标，
          * 列表的屏幕位置 = 窗口位置 + 控件位置（窗口拖动后 windowPos 变化，实测验证此式成立）。
          * 不依赖 Cursor.isAbove——它有边缘漏判（鼠标已在列表内仍返回 false）。
@@ -1106,24 +1090,9 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                         this.hoveredIndex = index;
                     }
                 }
-                if (this.hoveredIndex != this.lastDebugState) {
-                    this.lastDebugState = this.hoveredIndex;
-                    // FMLLog 走 String.format：Pos2d 坐标是 float，必须强转 int
-                    FMLLog.info(
-                        "[dualoutputhatchme][dbg] hover: cursor=(%d,%d) windowPos=(%d,%d) local=(%d,%d) index=%d total=%d",
-                        (int) cursor.getX(),
-                        (int) cursor.getY(),
-                        (int) windowPos.getX(),
-                        (int) windowPos.getY(),
-                        localX,
-                        localY,
-                        this.hoveredIndex,
-                        total);
-                }
             } catch (Throwable t) {
-                // 诊断代码本身绝不能拖崩游戏
+                // 窗口切换时查询失败则取消悬停，避免向 NEI 提供过期条目。
                 this.hoveredIndex = -1;
-                FMLLog.warning("[dualoutputhatchme][dbg] updateHoveredIndex failed: %s", t);
             }
         }
 
@@ -1138,14 +1107,6 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                 return null;
             }
             DualCacheEntry entry = entries.get(this.hoveredIndex);
-            if (DEBUG_NEI_HOVER && (this.debugCallCount == 0 || this.debugCallCount % 60 == 0)) {
-                FMLLog.info(
-                    "[dualoutputhatchme][dbg] getStackUnderMouse calls=%d, index=%d, entry=%s",
-                    this.debugCallCount + 1,
-                    this.hoveredIndex,
-                    entry.name);
-            }
-            this.debugCallCount++;
             if (entry.isItem()) {
                 ItemStack stack = entry.item.copy();
                 // 缓存数量是 long，钳到 int 让 NEI tooltip 显示真实数量
@@ -1254,14 +1215,6 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                 handled = true;
             } else {
                 handled = false;
-            }
-            if (DEBUG_NEI_HOVER) {
-                FMLLog.info(
-                    "[dualoutputhatchme][dbg] action: mode=%d entry=%s stack=%s handled=%b",
-                    mode,
-                    entry.name,
-                    stack == null ? "null" : stack.getDisplayName(),
-                    handled);
             }
             return handled;
         }
@@ -1385,9 +1338,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
             tag.setLong("size", s.getStackSize());
             items.appendTag(tag);
         }
-        // dualItemCache 是本 mod 自己的存档键；
-        // cachedItems 与 GT 输出总线(ME) 同名，供 OmniOcular 的「数据存储-物品」读取。
-        aNBT.setTag("dualItemCache", items.copy());
+        // 与 GT 总线和 OmniOcular 共用一个字段；现有存档已经包含 cachedItems。
         aNBT.setTag("cachedItems", items);
     }
 
@@ -1400,7 +1351,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                 MAX_FLUSH_INTERVAL,
                 aNBT.getInteger(NBT_FLUSH_INTERVAL) == 0 ? DEFAULT_FLUSH_INTERVAL
                     : aNBT.getInteger(NBT_FLUSH_INTERVAL)));
-        this.outputPriority = Math.max(0, Math.min(MAX_PRIORITY, aNBT.getInteger(NBT_PRIORITY)));
+        this.setOutputPriority(aNBT.getInteger(NBT_PRIORITY));
         this.setItemFilterRaw(aNBT.getString(NBT_ITEM_FILTER));
         this.setFluidFilterRaw(aNBT.getString(NBT_FLUID_FILTER));
         this.filterMode = aNBT.getInteger(NBT_FILTER_MODE) == FILTER_SPECIFIC ? FILTER_SPECIFIC : FILTER_TAG;
@@ -1427,7 +1378,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                 this.filterFluidMarks[fi++] = mark;
             }
         }
-        NBTBase itemsTag = aNBT.getTag("dualItemCache");
+        NBTBase itemsTag = aNBT.getTag("cachedItems");
         if (itemsTag instanceof NBTTagList) {
             NBTTagList l = (NBTTagList) itemsTag;
             for (int i = 0; i < l.tagCount(); ++i) {
@@ -1438,9 +1389,7 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
                 if (s != null) {
                     s.setStackSize(tag.getLong("size"));
                     this.itemCache.add(s);
-                    if (tag.getLong("size") > 0L) {
-                        this.itemsPending = true;
-                    }
+                    this.itemFlushQueue.add(this.itemCache.findPrecise(s));
                 } else {
                     System.out.println(
                         "[DualOutputHatchME] Failed to load cached item, it has been voided: "
@@ -1449,7 +1398,9 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
             }
         }
         // 存档里的缓存下一轮要冲进网络，否则没有新输出时会一直留在缓存里
-        this.fluidsPending = !this.fluidCache.isEmpty();
+        for (IAEFluidStack fluid : this.fluidCache) {
+            this.fluidFlushQueue.add(fluid);
+        }
         this.syncSnapshotDirty = true;
     }
 
@@ -1526,7 +1477,10 @@ public class MTEDualOutputHatchME extends MTEHatchOutputME implements IDualOutpu
     @Override
     public void getWailaNBTData(EntityPlayerMP player, TileEntity tile, NBTTagCompound tag, World world, int x, int y,
         int z) {
-        super.getWailaNBTData(player, tile, tag, world, x, y, z);
+        // MetaTileEntity 的通用 AE 状态；不调用 ME 父类，避免它先全量排序流体缓存。
+        tag.setBoolean("isActive", this.isActive());
+        tag.setBoolean("isPowered", this.isPowered());
+        tag.setBoolean("isBooting", this.isBooting());
 
         int itemCount = 0;
         List<IAEItemStack> topItems = new ArrayList<>(WAILA_MAX_STACKS);
